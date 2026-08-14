@@ -22,10 +22,11 @@ function dailyMaintenance() {
     }
 
     const headers = allValues[0];
-    const reqDateIdx = headers.indexOf('Req_Date');
+    const statusIdx = headers.indexOf('Status');
+    const approveDateIdx = headers.indexOf('Approve_Datetime');
 
-    if (reqDateIdx === -1) {
-      throw new Error('Req_Date column not found in Transactions sheet.');
+    if (statusIdx === -1 || approveDateIdx === -1) {
+      throw new Error('Status or Approve_Datetime column not found in Transactions sheet.');
     }
 
     const rowsToKeep = [];
@@ -33,9 +34,14 @@ function dailyMaintenance() {
 
     for (let i = 1; i < allValues.length; i++) {
       const row = allValues[i];
-      const rowDateStr = Util_Date.formatDateBangkok(row[reqDateIdx]);
+      const status = String(row[statusIdx] || '').trim().toUpperCase();
+      const approveDateStr = Util_Date.formatDateBangkok(row[approveDateIdx]);
+      const hasValidApproveDate = /^\d{4}-\d{2}-\d{2}$/.test(approveDateStr);
 
-      if (rowDateStr && rowDateStr < cutoffDateStr) {
+      // Delete only records that were approved before the retention cutoff.
+      // Pending, rejected, blank-status, and approved records without a valid
+      // approval timestamp are retained to avoid deleting unresolved data.
+      if (status === 'APPROVED' && hasValidApproveDate && approveDateStr < cutoffDateStr) {
         rowsToDelete.push(row);
       } else {
         rowsToKeep.push(row);
@@ -58,8 +64,9 @@ function dailyMaintenance() {
 
     // Backup succeeded -> Safely rewrite Transactions sheet with rowsToKeep
     Repository_Sheets.rewriteSheetData(CONFIG.SHEETS.TRANSACTIONS, headers, rowsToKeep);
+    Repository_Cache.clearCache('TRANSACTIONS_ALL');
 
-    Logger.log('dailyMaintenance: Successfully deleted ' + rowsToDelete.length + ' old rows. ' + rowsToKeep.length + ' rows remaining.');
+    Logger.log('dailyMaintenance: Successfully deleted ' + rowsToDelete.length + ' approved rows with approval dates before ' + cutoffDateStr + '. ' + rowsToKeep.length + ' rows remaining.');
     return Util_Response.buildSuccess({
       deletedCount: rowsToDelete.length,
       retainedCount: rowsToKeep.length,
